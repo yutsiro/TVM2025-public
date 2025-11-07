@@ -1,3 +1,10 @@
 AddMul {
- // Write the rules here
+    Expr = AddExpr  -- main
+    AddExpr = AddExpr "+" MulExpr  -- add
+            | MulExpr  -- mul
+    MulExpr = MulExpr "*" Atom  -- mul
+            | Atom  -- pri
+    Atom = "(" Expr ")"  -- paren
+            | number  -- num
+    number = digit+  -- digits
 }
