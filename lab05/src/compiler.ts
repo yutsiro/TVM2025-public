@@ -1,13 +1,13 @@
-import { c as C, Op, I32 } from "../../wasm";
+import { c as C, Op, I32 } from "../../wasm"; // c - набор типа wasm инструкций, OP - тип wasm операций, I32 - 32битные инструкции
 import { Expr } from "../../lab04";
 import { buildOneFunctionModule, Fn } from "./emitHelper";
 
-export function getVariables(e: Expr): string[] {
-  const result: string[] = [];
+export function getVariables(e: Expr): string[] { //обходим AST и собираем уникальные переменные
+  const result: string[] = []; // массив имен переменных
   function walk(node: Expr): void {
-    if (node.kind === "variable") {
+    if (node.kind === "variable") { // если встречаем переменную и такой еще не было - добавляем
       if (!result.includes(node.name)) result.push(node.name);
-    } else if (node.kind === "binary") {
+    } else if (node.kind === "binary") { // рекурсивно проходимся по обеим ветвям если встречаем операцию
       walk(node.left);
       walk(node.right);
     } else if (node.kind === "unary") {
@@ -15,16 +15,18 @@ export function getVariables(e: Expr): string[] {
     }
   }
   walk(e);
-  return result;
+  return result; // итог -- список переменных в порядке первого появления
 }
 
 export async function buildFunction(e: Expr, variables: string[]): Promise<Fn<number>> {
-  const expr = wasm(e, variables);
+  const expr = wasm(e, variables); // делает wasm-инструкции из AST
   return await buildOneFunctionModule("test", variables.length, [expr]);
 }
+// buildOneFunctionModule создает модуль wasm, с одной экспортируемой функцией
+// промис - обещание вернуть результат позже: тут - функцию
 
 function wasm(e: Expr, args: string[]): Op<I32> {
-  const varMap = new Map(args.map((name, i) => [name, i]));
+  const varMap = new Map(args.map((name, i) => [name, i]));//Map: имя переменной->индекс аргумента
 
   function compile(node: Expr): Op<I32> {
     switch (node.kind) {
