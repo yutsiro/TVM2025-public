@@ -1,5 +1,5 @@
 import { MatchResult } from 'ohm-js';
-import { arithGrammar, ArithmeticActionDict, ArithmeticSemantics } from '../../lab03';
+import { arithGrammar, ArithmeticActionDict, ArithmeticSemantics, SyntaxError } from '../../lab03';
 import { Expr } from './ast';
 
 export const getExprAst: ArithmeticActionDict<Expr> = {

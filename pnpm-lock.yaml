@@ -139,6 +139,9 @@ importers:
 
   lab05:
     dependencies:
+      '@tvm/lab03':
+        specifier: workspace:*
+        version: link:../lab03
       '@tvm/lab04':
         specifier: workspace:1.0.0
         version: link:../lab04
