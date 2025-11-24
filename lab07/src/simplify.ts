@@ -4,10 +4,10 @@ export function simplify(e: Expr, identities: [Expr, Expr][]): Expr {
     let expanded = expandAllParentheses(e);
     let simplified = simplifyFully(expanded, identities);
 
-    return combineLikeTerms(simplified);
+    return combineAlikeTerms(simplified);
 }
 
-function combineLikeTerms(expr: Expr): Expr {
+function combineAlikeTerms(expr: Expr): Expr {
     switch (expr.kind) {
         case 'binary':
             if (expr.operator === '+' || expr.operator === '-') {
@@ -18,13 +18,13 @@ function combineLikeTerms(expr: Expr): Expr {
             }
             return {
                 ...expr,
-                left: combineLikeTerms(expr.left),
-                right: combineLikeTerms(expr.right)
+                left: combineAlikeTerms(expr.left),
+                right: combineAlikeTerms(expr.right)
             };
         case 'unary':
             return {
                 ...expr,
-                argument: combineLikeTerms(expr.argument)
+                argument: combineAlikeTerms(expr.argument)
             };
         default:
             return expr;
@@ -36,11 +36,11 @@ function combineTermsInSum(expr: Expr): Expr {
         return expr;
     }
 
-    // Собираем все члены суммы в массив с учетом знаков
+    // собираем все члены суммы в массив с учетом знаков
     const terms: { expr: Expr, sign: number }[] = [];
     collectTerms(expr, 1, terms);
 
-    // Группируем подобные члены
+    // группируем подобные члены суммы
     const grouped = new Map<string, { coefficient: number, term: Expr }>();
 
     for (const { expr: term, sign } of terms) {
@@ -54,7 +54,7 @@ function combineTermsInSum(expr: Expr): Expr {
         }
     }
 
-    // Создаем новое выражение из сгруппированных членов
+    // создаем новое выражение из сгруппированных членов
     const newTerms: Expr[] = [];
 
     for (const [key, { coefficient, term }] of grouped) {
@@ -69,7 +69,7 @@ function combineTermsInSum(expr: Expr): Expr {
                 argument: term
             });
         } else {
-            // Создаем коэффициент * терм
+            // создаем коэффициент * терм
             const coefficientExpr: Expr = { kind: 'number', value: Math.abs(coefficient) };
             const product: Expr = {
                 kind: 'binary',
@@ -90,7 +90,7 @@ function combineTermsInSum(expr: Expr): Expr {
         }
     }
 
-    // Собираем все члены обратно в сумму
+    // собираем все члены обратно в сумму
     if (newTerms.length === 0) {
         return { kind: 'number', value: 0 };
     }
@@ -121,15 +121,14 @@ function collectTerms(expr: Expr, sign: number, terms: { expr: Expr, sign: numbe
 }
 
 function getTermKey(term: Expr): string {
-    // Создаем ключ для группировки подобных членов
+    // создаем ключ для группировки подобных членов
     if (term.kind === 'binary' && term.operator === '*') {
-        // Для произведений: сортируем множители
+        // для произведений сортируем множители
         const factors: string[] = [];
         collectFactors(term, factors);
         factors.sort();
         return factors.join('*');
     } else {
-        // Для простых членов
         return JSON.stringify(normalizeTerm(term));
     }
 }
@@ -144,11 +143,11 @@ function collectFactors(expr: Expr, factors: string[]): void {
 }
 
 function normalizeTerm(term: Expr): Expr {
-    // Приводим терм к каноническому виду для сравнения
+    // приводим терм к каноническому виду для сравнения
     switch (term.kind) {
         case 'binary':
             if (term.operator === '*' || term.operator === '+') {
-                // Для коммутативных операций сортируем аргументы
+                // сортируем аргументы
                 const left = normalizeTerm(term.left);
                 const right = normalizeTerm(term.right);
 
@@ -164,7 +163,7 @@ function normalizeTerm(term: Expr): Expr {
 }
 
 function shouldSwap(a: Expr, b: Expr): boolean {
-    // Определяем порядок для канонической формы
+    // канонический вид: num * x
     if (a.kind === 'number' && b.kind !== 'number') return false;
     if (a.kind !== 'number' && b.kind === 'number') return true;
     if (a.kind === 'variable' && b.kind === 'variable') return a.name > b.name;
@@ -176,11 +175,10 @@ function combineTermsInProduct(expr: Expr): Expr {
         return expr;
     }
 
-    // Собираем все множители
     const factors: Expr[] = [];
     collectAllFactors(expr, factors);
 
-    // Группируем числовые множители и одинаковые переменные
+    // группируем числовые множители и одинаковые переменные
     let numericFactor = 1;
     const variableFactors = new Map<string, number>();
     const otherFactors: Expr[] = [];
@@ -196,15 +194,14 @@ function combineTermsInProduct(expr: Expr): Expr {
         }
     }
 
-    // Собираем результат обратно
+    // собираем результат обратно
     const resultFactors: Expr[] = [];
 
-    // Числовой коэффициент
+    // добавлем числовой множитель, если он != 1; или =1, если нет других множителей
     if (numericFactor !== 1 || (variableFactors.size === 0 && otherFactors.length === 0)) {
         resultFactors.push({ kind: 'number', value: numericFactor });
     }
 
-    // Переменные с показателями степени
     for (const [name, count] of variableFactors) {
         if (count === 1) {
             resultFactors.push({ kind: 'variable', name });
@@ -218,10 +215,8 @@ function combineTermsInProduct(expr: Expr): Expr {
         }
     }
 
-    // Остальные множители
     resultFactors.push(...otherFactors);
 
-    // Собираем произведение
     if (resultFactors.length === 0) {
         return { kind: 'number', value: 1 };
     }
@@ -264,9 +259,8 @@ function expandAllParentheses(expr: Expr): Expr {
             const left = expandAllParentheses(expr.left);
             const right = expandAllParentheses(expr.right);
 
-            // Раскрываем скобки для умножения
             if (expr.operator === '*') {
-                // Случай: (a + b) * c
+                // (a + b) * c
                 if (left.kind === 'binary' && (left.operator === '+' || left.operator === '-')) {
                     if (left.operator === '+') {
                         return {
@@ -285,7 +279,7 @@ function expandAllParentheses(expr: Expr): Expr {
                                 right: right
                             })
                         };
-                    } else { // '-'
+                    } else { // -
                         return {
                             kind: 'binary',
                             operator: '-',
@@ -305,7 +299,7 @@ function expandAllParentheses(expr: Expr): Expr {
                     }
                 }
 
-                // Случай: a * (b + c)
+                // a * (b + c)
                 if (right.kind === 'binary' && (right.operator === '+' || right.operator === '-')) {
                     if (right.operator === '+') {
                         return {
@@ -324,7 +318,7 @@ function expandAllParentheses(expr: Expr): Expr {
                                 right: right.right
                             })
                         };
-                    } else { // '-'
+                    } else { // -
                         return {
                             kind: 'binary',
                             operator: '-',
@@ -345,7 +339,7 @@ function expandAllParentheses(expr: Expr): Expr {
                 }
             }
 
-            // Для вычитания: a - (b + c) => a - b - c
+            // a - (b + c) => a - b - c
             if (expr.operator === '-' && right.kind === 'binary' && right.operator === '+') {
                 return {
                     kind: 'binary',
@@ -360,7 +354,7 @@ function expandAllParentheses(expr: Expr): Expr {
                 };
             }
 
-            // Для вычитания: a - (b - c) => a - b + c
+            //  a - (b - c) => a - b + c
             if (expr.operator === '-' && right.kind === 'binary' && right.operator === '-') {
                 return {
                     kind: 'binary',
@@ -375,7 +369,6 @@ function expandAllParentheses(expr: Expr): Expr {
                 };
             }
 
-            // Для других операций просто рекурсивно обрабатываем подвыражения
             return { ...expr, left, right };
     }
 }
@@ -399,7 +392,6 @@ function simplifyFully(expr: Expr, identities: [Expr, Expr][]): Expr {
 
             const before = JSON.stringify(current);
 
-            // Применяем пользовательские тождества
             for (const [left, right] of identities) {
                 const result1 = applyIdentityEverywhere(current, left, right);
                 if (JSON.stringify(result1) !== before) {
@@ -455,7 +447,7 @@ function applyAlgebraicIdentities(expr: Expr): Expr {
             const left = applyAlgebraicIdentities(expr.left);
             const right = applyAlgebraicIdentities(expr.right);
 
-            // a + (b - a) => b
+            // a + (b - a) = b
             if (expr.operator === '+' && right.kind === 'binary' && right.operator === '-') {
                 if (areEqual(left, right.right)) {
                     return right.left;
@@ -465,42 +457,24 @@ function applyAlgebraicIdentities(expr: Expr): Expr {
                 }
             }
 
-            // (a - b) + b => a
+            // (a - b) + b = a
             if (expr.operator === '+' && left.kind === 'binary' && left.operator === '-') {
                 if (areEqual(left.right, right)) {
                     return left.left;
                 }
             }
 
-            // a - (a - b) => b
+            // a - (a - b) = b
             if (expr.operator === '-' && right.kind === 'binary' && right.operator === '-') {
                 if (areEqual(left, right.left)) {
                     return right.right;
                 }
             }
 
-            // a + a => 2*a
-            if (expr.operator === '+' && areEqual(left, right)) {
-                return {
-                    kind: 'binary',
-                    operator: '*',
-                    left: { kind: 'number', value: 2 },
-                    right: left
-                };
-            }
-
-            // a - a => 0
-            if (expr.operator === '-' && areEqual(left, right)) {
-                return { kind: 'number', value: 0 };
-            }
-
-            // Коммутативность: приводим к каноническому виду
             if (expr.operator === '+' || expr.operator === '*') {
-                // Числа всегда справа
                 if (left.kind === 'number' && right.kind !== 'number') {
                     return { ...expr, left: right, right: left };
                 }
-                // Переменные в алфавитном порядке
                 if (left.kind === 'variable' && right.kind === 'variable' && left.name > right.name) {
                     return { ...expr, left: right, right: left };
                 }
@@ -573,7 +547,6 @@ function matchPattern(expr: Expr, pattern: Expr): Map<string, Expr> | null {
         }
 
         if (e.kind === 'binary' && p.kind === 'binary') {
-            // Для коммутативных операций проверяем оба порядка
             if ((e.operator === '+' || e.operator === '*') &&
                 (p.operator === '+' || p.operator === '*')) {
                 return (match(e.left, p.left) && match(e.right, p.right)) ||
@@ -629,7 +602,6 @@ function areEqual(a: Expr, b: Expr): boolean {
                    areEqual(a.argument, (b as any).argument);
 
         case 'binary':
-            // Для коммутативных операций учитываем порядок
             if ((a.operator === '+' || a.operator === '*') &&
                 ((b as any).operator === '+' || (b as any).operator === '*')) {
                 return (areEqual(a.left, (b as any).left) && areEqual(a.right, (b as any).right)) ||
@@ -648,7 +620,7 @@ function foldConstants(expr: Expr): Expr {
             const left = foldConstants(expr.left);
             const right = foldConstants(expr.right);
 
-            // Вычисление констант
+            // считаем константы (num+num входит сюда)
             if (left.kind === 'number' && right.kind === 'number') {
                 switch (expr.operator) {
                     case '+': return { kind: 'number', value: left.value + right.value };
@@ -660,12 +632,11 @@ function foldConstants(expr: Expr): Expr {
                 }
             }
 
-            // Базовые упрощения
             switch (expr.operator) {
-                case '+':
+                case '+':// +- 0
                     if (right.kind === 'number' && right.value === 0) return left;
                     if (left.kind === 'number' && left.value === 0) return right;
-                    // Коммутативность: собираем константы вместе
+                    // num + x + num
                     if (left.kind === 'binary' && left.operator === '+' && left.left.kind === 'number' && right.kind === 'number') {
                         return {
                             kind: 'binary',
@@ -688,7 +659,7 @@ function foldConstants(expr: Expr): Expr {
                     }
                     if (right.kind === 'number' && right.value === 1) return left;
                     if (left.kind === 'number' && left.value === 1) return right;
-                    // Объединение констант
+                    // (num1 * num2) = num3
                     if (left.kind === 'binary' && left.operator === '*' &&
                         left.left.kind === 'number' && right.kind === 'number') {
                         return {
@@ -697,7 +668,7 @@ function foldConstants(expr: Expr): Expr {
                             left: { kind: 'number', value: left.left.value * right.value },
                             right: left.right
                         };
-                    }
+                    } // num * (num * x) = num2 * x
                     if (left.kind === 'number' && right.kind === 'binary' && right.operator === '*' &&
                         right.left.kind === 'number') {
                         return {
@@ -709,9 +680,9 @@ function foldConstants(expr: Expr): Expr {
                     }
                     break;
 
-                case '/':
+                case '/': // 0/x, x/1, x/x
                     if (left.kind === 'number' && left.value === 0) return left;
-                    if (right.kind === 'number' && right.value === 1) return left;
+                    // if (right.kind === 'number' && right.value === 1) return left;
                     if (areEqual(left, right)) return { kind: 'number', value: 1 };
                     break;
             }
