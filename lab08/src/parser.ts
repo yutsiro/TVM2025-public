@@ -280,7 +280,7 @@ export function checkCondition(
     }
 }
 
-function foldLogicalChain<T>(
+export function foldLogicalChain<T>(
     first: any,
     rest: any,
     makeNode: (left: T, right: T) => T
@@ -293,7 +293,7 @@ function foldLogicalChain<T>(
     return node;
 }
 
-function repeatPrefix<T>(
+export function repeatPrefix<T>(
     nots: any,
     base: any,
     makeNode: (inner: T) => T
@@ -331,7 +331,7 @@ export const getFunnyAst = {
         } as ast.Module;
     },
 
-    Function(name, _lp, params, _rp, _preOpt, retSpec, _postOpt, usesOpt, stmt) {
+    Function(name, _lp, params, _rp, retSpec, usesOpt, stmt) {
         return {
             type: "fun",
             name: name.sourceString,
@@ -394,17 +394,12 @@ export const getFunnyAst = {
         } as ast.ExprStmt;
     },
 
-    While(_while, _lp, cond, _rp, invOpt, body) {
+    While(_while, _lp, cond, _rp, body) {
         return {
             type: "while",
             condition: cond.parse() as ast.Condition,
-            invariant: parseOptional<ast.Predicate | null>(invOpt, null),
             body: body.parse() as ast.Statement,
         } as ast.WhileStmt;
-    },
-
-    Invariant(_inv, pred) {
-        return pred.parse() as ast.Predicate;
     },
 
     If(_if, _lp, cond, _rp, thenStmt, _elseKwOpt, elseStmtOpt) {
@@ -535,82 +530,7 @@ export const getFunnyAst = {
 
     Comparison_lt(left, _op, right) {
         return makeComparisonNode(left, right, "<");
-    },
-
-    ImplyPred_imply(orPred, _arrow, rest) {
-        const left = orPred.parse() as ast.Predicate;
-        const right = rest.parse() as ast.Predicate;
-
-        const notLeft: ast.NotPred = {
-            kind: "not",
-            predicate: left,
-        };
-        return {
-            kind: "or",
-            left: notLeft,
-            right,
-        } as ast.OrPred;
-    },
-
-    OrPred(first, _ops, rest) {
-        return foldLogicalChain<ast.Predicate>(first, rest, (left, right) => ({
-            kind: "or",
-            left,
-            right,
-        } as ast.OrPred));
-    },
-
-    AndPred(first, _ops, rest) {
-        return foldLogicalChain<ast.Predicate>(first, rest, (left, right) => ({
-            kind: "and",
-            left,
-            right,
-        } as ast.AndPred));
-    },
-
-    NotPred(nots, atom) {
-        return repeatPrefix<ast.Predicate>(nots, atom, (predicate) => ({
-            kind: "not",
-            predicate,
-        } as ast.NotPred));
-    },
-
-    AtomPred_true(_t) {
-        return { kind: "true" } as ast.TrueCond;
-    },
-
-    AtomPred_false(_f) {
-        return { kind: "false" } as ast.FalseCond;
-    },
-
-    AtomPred_paren(_lp, pred, _rp) {
-        return {
-            kind: "paren",
-            inner: pred.parse() as ast.Predicate,
-        } as ast.ParenPred;
-    },
-
-    Quantifier(qTok, _lp, paramNode, _bar, body, _rp) {
-        const quant = qTok.sourceString as "forall" | "exists";
-        const param = paramNode.parse() as ast.ParameterDef;
-        const varName = param.name;
-        const varType = param.paramType;
-        return {
-            kind: "quantifier",
-            quant,
-            varName,
-            varType,
-            body: body.parse() as ast.Predicate,
-        } as ast.Quantifier;
-    },
-
-    FormulaRef(name, _lp, params, _rp) {
-        return {
-            kind: "formula",
-            name: name.sourceString,
-            parameters: params.parse() as ast.ParameterDef[],
-        } as ast.FormulaRef;
-    },
+    }
 } satisfies FunnyActionDict<any>;
 
 export const semantics: FunnySemanticsExt = grammar.Funny.createSemantics() as FunnySemanticsExt;

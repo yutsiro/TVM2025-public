@@ -4,15 +4,11 @@ Funny <: Arithmetic {
 
     Function =
         variable "(" ParameterList ")"
-        PreCond?
         Ret
-        PostCond?
         Uses?
         Statement
 
-    PreCond = "requires" Predicate
     Ret = "returns" ParameterList
-    PostCond = "ensures" Predicate
     Uses = "uses" ParameterList
 
     ParameterList = ListOf<Parameter, ",">
@@ -32,9 +28,7 @@ Funny <: Arithmetic {
 
     Block = "{" Statement* "}"
 
-    While = "while" "(" Condition ")" Invariant? Statement
-    Invariant = "invariant" Predicate
-
+    While = "while" "(" Condition ")" Statement
     If = "if" "(" Condition ")" Statement ("else" Statement)?
 
     LValueList = ListOf<LValue, ",">
@@ -58,9 +52,7 @@ Funny <: Arithmetic {
               | OrCond
 
     OrCond = AndCond ("or" AndCond)*
-
     AndCond = NotCond ("and" NotCond)*
-
     NotCond = ("not")* AtomCond
 
     AtomCond
@@ -76,31 +68,6 @@ Funny <: Arithmetic {
         | Expr "<=" Expr               -- le
         | Expr ">"  Expr               -- gt
         | Expr "<"  Expr               -- lt
-
-    Predicate = ImplyPred
-
-    ImplyPred = OrPred "->" ImplyPred        -- imply
-        | OrPred
-
-    OrPred = AndPred ("or" AndPred)*
-
-    AndPred = NotPred ("and" NotPred)*
-
-    NotPred = ("not")* AtomPred
-
-    AtomPred
-        = Quantifier                   -- quantifier
-        | FormulaRef                   -- formulaRef
-        | "true"                       -- true
-        | "false"                      -- false
-        | Comparison                   -- comparison
-        | "(" Predicate ")"            -- paren
-
-    Quantifier
-        = ("forall" | "exists")
-        "(" Parameter "|" Predicate ")"
-
-    FormulaRef = variable "(" ParameterList ")"
 
     space += lineComment | blockComment
     lineComment  = "//" (~"\n" any)* ("\n" | end)

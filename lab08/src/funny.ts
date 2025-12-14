@@ -55,7 +55,7 @@ export interface IfStmt {
 export interface WhileStmt {
     type: "while";
     condition: Condition;
-    invariant: Predicate | null;
+    // invariant: Predicate | null;
     body: Statement;
 }
 
@@ -129,51 +129,4 @@ export interface ImpliesCond {
 export interface ParenCond {
     kind: "paren";
     inner: Condition;
-}
-
-export type Predicate =
-    | Quantifier
-    | FormulaRef
-    | FalseCond
-    | TrueCond
-    | ComparisonCond
-    | NotPred
-    | AndPred
-    | OrPred
-    | ParenPred;
-
-export interface Quantifier {
-    kind: "quantifier";
-    quant: "forall" | "exists";
-    varName: string;
-    varType: "int" | "int[]";
-    body: Predicate;
-}
-
-export interface FormulaRef {
-    kind: "formula";
-    name: string;
-    parameters: ParameterDef[];
-}
-
-export interface NotPred {
-    kind: "not";
-    predicate: Predicate;
-}
-
-export interface AndPred {
-    kind: "and";
-    left: Predicate;
-    right: Predicate;
-}
-
-export interface OrPred {
-    kind: "or";
-    left: Predicate;
-    right: Predicate;
-}
-
-export interface ParenPred {
-    kind: "paren";
-    inner: Predicate;
 }

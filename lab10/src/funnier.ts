@@ -1,28 +1,47 @@
 import {
+    Module as BaseModule,
+    FunctionDef as BaseFunctionDef,
     ParameterDef,
     Statement,
-    Predicate,
+    Condition,
     Expr
 } from '../../lab08/src/funny';
 
-export interface ModuleWithoutFunctions {
-    type: 'module';
-}
-
-export interface AnnotatedModule extends ModuleWithoutFunctions {
+// Расширяем базовые типы
+export interface AnnotatedModule extends BaseModule {
     formulas: FormulaDef[];
     functions: AnnotatedFunctionDef[];
 }
 
-export interface AnnotatedFunctionDef {
-    type: 'fun';
-    name: string;
-    parameters: ParameterDef[];
-    returns: ParameterDef[];
-    locals: ParameterDef[];
-    body: Statement;
+export interface AnnotatedFunctionDef extends BaseFunctionDef {
     requires: Predicate | null;
     ensures: Predicate | null;
+}
+
+// ДОБАВЛЯЕМ типы для верификации
+export type Predicate =
+    | Quantifier
+    | FormulaRefPredicate
+    | TrueCond
+    | FalseCond
+    | ComparisonCond
+    | NotPred
+    | AndPred
+    | OrPred
+    | ParenPred;
+
+export interface Quantifier {
+    kind: "quantifier";
+    quant: "forall" | "exists";
+    varName: string;
+    varType: "int" | "int[]";
+    body: Predicate;
+}
+
+export interface FormulaRefPredicate {
+    kind: "formula";
+    name: string;
+    args: Expr[];
 }
 
 export interface FormulaDef {
@@ -32,8 +51,39 @@ export interface FormulaDef {
     body: Predicate;
 }
 
-export interface FormulaRefPredicate {
-    kind: 'formula';
-    name: string;
-    args: Expr[];
+export interface NotPred {
+    kind: "not";
+    predicate: Predicate;
+}
+
+export interface AndPred {
+    kind: "and";
+    left: Predicate;
+    right: Predicate;
+}
+
+export interface OrPred {
+    kind: "or";
+    left: Predicate;
+    right: Predicate;
+}
+
+export interface ParenPred {
+    kind: "paren";
+    inner: Predicate;
+}
+
+export interface TrueCond {
+    kind: "true";
+}
+
+export interface FalseCond {
+    kind: "false";
+}
+
+export interface ComparisonCond {
+    kind: "comparison";
+    left: Expr;
+    op: "==" | "!=" | ">" | "<" | ">=" | "<=";
+    right: Expr;
 }

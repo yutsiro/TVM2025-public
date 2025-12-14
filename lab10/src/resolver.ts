@@ -2,171 +2,178 @@ import {
     AnnotatedModule,
     FormulaDef,
     AnnotatedFunctionDef,
-    FormulaRefPredicate
+    FormulaRefPredicate,
+    Predicate
 } from "./funnier";
 import {
     checkModule as checkBaseModule,
-    checkFunction as checkBaseFunction,
-    checkStmt,
     checkExpr,
-    checkCondition,
-    checkLValue,
-    checkFuncCall,
-    parseOptional,
-    // Типы окружений
     FunEnv,
     VarEnv
 } from '../../lab08/src/parser';
 import {
-    Predicate,
-    Expr,
-    ParameterDef,
-    FunctionDef,
-    Statement
+    FunctionDef
 } from '../../lab08/src/funny';
 
-// Создаем расширенное окружение для формул
-interface ExtendedEnv {
-    variables: VarEnv;
-    funEnv: FunEnv;
-    formulas: Map<string, FormulaDef>;
-}
-
 export function resolveModule(m: AnnotatedModule): void {
-    // 1. Создаем базовое окружение для функций
-    const funEnv: FunEnv = Object.create(null);
-    for (const fn of m.functions) {
-        // Приводим к базовому типу FunctionDef
-        const baseFn: FunctionDef = {
-            type: 'fun',
-            name: fn.name,
-            parameters: fn.parameters,
-            returns: fn.returns,
-            locals: fn.locals,
-            body: fn.body
-        };
-        funEnv[fn.name] = baseFn;
+    const allNames = new Set<string>();
+
+    for (const formula of m.formulas) {
+        if (allNames.has(formula.name)) {
+            throw new Error(`Duplicate name "${formula.name}" (used for formula)`);
+        }
+        allNames.add(formula.name);
     }
 
-    // 2. Создаем базовый модуль для проверки
+    for (const func of m.functions) {
+        if (allNames.has(func.name)) {
+            throw new Error(`Duplicate name "${func.name}" (used for function)`);
+        }
+        allNames.add(func.name);
+    }
+
+    for (const formula of m.formulas) {
+        checkFormula(formula, m);
+    }
+
     const baseModule = {
         type: 'module' as const,
-        functions: Object.values(funEnv)
+        functions: m.functions.map(f => ({
+            type: 'fun' as const,
+            name: f.name,
+            parameters: f.parameters,
+            returns: f.returns,
+            locals: f.locals,
+            body: f.body
+        }))
     };
-
-    // 3. Выполняем базовую проверку (из 8-й лабы)
     checkBaseModule(baseModule);
 
-    // 4. Создаем расширенное окружение с формулами
-    const formulaMap = new Map<string, FormulaDef>();
-    for (const formula of m.formulas) {
-        if (formulaMap.has(formula.name)) {
-            throw new Error(`Duplicate formula "${formula.name}"`);
-        }
-        formulaMap.set(formula.name, formula);
-
-        // Проверяем конфликты имен с функциями
-        if (funEnv[formula.name]) {
-            throw new Error(`Name "${formula.name}" used for both formula and function`);
-        }
-    }
-
-    // 5. Проверяем каждую формулу
-    for (const formula of m.formulas) {
-        checkFormula(formula, { variables: new Set(), funEnv, formulas: formulaMap });
-    }
-
-    // 6. Проверяем аннотации в функциях
+    const funEnv: FunEnv = {};
     for (const func of m.functions) {
-        checkFunctionAnnotations(func, funEnv, formulaMap);
+        const baseFunc: FunctionDef = {
+            type: 'fun',
+            name: func.name,
+            parameters: func.parameters,
+            returns: func.returns,
+            locals: func.locals,
+            body: func.body
+        };
+        funEnv[func.name] = baseFunc;
+    }
+
+    for (const func of m.functions) {
+        checkFunctionAnnotations(func, funEnv, m.formulas);
     }
 }
 
-function checkFormula(formula: FormulaDef, env: ExtendedEnv): void {
-    // Создаем локальное окружение для формулы
-    const localEnv: ExtendedEnv = {
-        variables: new Set(),
-        funEnv: env.funEnv,
-        formulas: env.formulas
-    };
-
-    // Добавляем параметры формулы в окружение
+function checkFormula(formula: FormulaDef, module: AnnotatedModule): void {
+    const varEnv: VarEnv = new Set();
     for (const param of formula.parameters) {
-        localEnv.variables.add(param.name);
-    }
-
-    // Проверяем тело формулы
-    checkPredicate(formula.body, localEnv);
-}
-
-function checkFunctionAnnotations(func: AnnotatedFunctionDef, funEnv: FunEnv, formulas: Map<string, FormulaDef>): void {
-    // Создаем окружение для проверки функции
-    const varEnv: VarEnv = new Set<string>();
-
-    // Добавляем параметры
-    for (const param of func.parameters) {
         varEnv.add(param.name);
     }
 
-    // Добавляем возвращаемые значения
-    for (const ret of func.returns) {
-        varEnv.add(ret.name);
-    }
-
-    // Добавляем локальные переменные
-    for (const local of func.locals) {
-        varEnv.add(local.name);
-    }
-
-    // Создаем расширенное окружение
-    const env: ExtendedEnv = { variables: varEnv, funEnv, formulas };
-
-    // 1. Проверяем предусловие (только параметры)
-    if (func.requires) {
-        const preEnv: ExtendedEnv = {
-            variables: new Set(),
-            funEnv,
-            formulas
+    const funEnv: FunEnv = {};
+    for (const func of module.functions) {
+        const baseFunc: FunctionDef = {
+            type: 'fun',
+            name: func.name,
+            parameters: func.parameters,
+            returns: func.returns,
+            locals: func.locals,
+            body: func.body
         };
-        // Добавляем только параметры
-        for (const param of func.parameters) {
-            preEnv.variables.add(param.name);
-        }
-        checkPredicate(func.requires, preEnv);
+        funEnv[func.name] = baseFunc;
     }
 
-    // 2. Проверяем тело функции (используем базовую проверку из 8-й лабы)
-    // Это уже было сделано в checkBaseModule, но если нужно проверить инварианты:
-    checkInvariantsInBody(func.body, env);
-
-    // 3. Проверяем постусловие (параметры + возвращаемые значения)
-    if (func.ensures) {
-        const postEnv: ExtendedEnv = {
-            variables: new Set(),
-            funEnv,
-            formulas
-        };
-        // Добавляем параметры и возвращаемые значения
-        for (const param of func.parameters) {
-            postEnv.variables.add(param.name);
-        }
-        for (const ret of func.returns) {
-            postEnv.variables.add(ret.name);
-        }
-        checkPredicate(func.ensures, postEnv);
+    const formulaMap = new Map<string, FormulaDef>();
+    for (const f of module.formulas) {
+        formulaMap.set(f.name, f);
     }
+
+    checkPredicate(formula.body, {
+        variables: varEnv,
+        funEnv,
+        formulas: formulaMap,
+        allowedVariables: varEnv
+    });
 }
 
-function checkInvariantsInBody(stmt: Statement, env: ExtendedEnv): void {
+function checkFunctionAnnotations(
+    func: AnnotatedFunctionDef,
+    funEnv: FunEnv,
+    allFormulas: FormulaDef[]
+): void {
+    const formulaMap = new Map<string, FormulaDef>();
+    for (const f of allFormulas) {
+        formulaMap.set(f.name, f);
+    }
+
+    const fullVarEnv: VarEnv = new Set();
+    for (const param of func.parameters) {
+        fullVarEnv.add(param.name);
+    }
+    for (const ret of func.returns) {
+        fullVarEnv.add(ret.name);
+    }
+    for (const local of func.locals) {
+        fullVarEnv.add(local.name);
+    }
+
+    if (func.requires) {
+        const preVarEnv: VarEnv = new Set();
+        for (const param of func.parameters) {
+            preVarEnv.add(param.name);
+        }
+
+        checkPredicate(func.requires, {
+            variables: preVarEnv,
+            funEnv,
+            formulas: formulaMap,
+            allowedVariables: preVarEnv
+        });
+    }
+
+    if (func.ensures) {
+        const postVarEnv: VarEnv = new Set();
+        for (const param of func.parameters) {
+            postVarEnv.add(param.name);
+        }
+        for (const ret of func.returns) {
+            postVarEnv.add(ret.name);
+        }
+
+        checkPredicate(func.ensures, {
+            variables: postVarEnv,
+            funEnv,
+            formulas: formulaMap,
+            allowedVariables: postVarEnv
+        });
+    }
+
+    checkInvariantsInBody(func.body, {
+        variables: fullVarEnv,
+        funEnv,
+        formulas: formulaMap,
+        allowedVariables: fullVarEnv
+    });
+}
+
+type PredicateEnv = {
+    variables: VarEnv;
+    funEnv: FunEnv;
+    formulas: Map<string, FormulaDef>;
+    allowedVariables: VarEnv;
+};
+
+function checkInvariantsInBody(stmt: any, env: PredicateEnv): void {
     if (!stmt) return;
 
     switch (stmt.type) {
         case 'while':
-            // Проверяем инвариант цикла
-            if ('invariant' in stmt && stmt.invariant) {
-                checkPredicate(stmt.invariant as any, env);
+            if (stmt.invariant) {
+                checkPredicate(stmt.invariant, env);
             }
-            // Рекурсивно проверяем тело цикла
             checkInvariantsInBody(stmt.body, env);
             break;
 
@@ -182,47 +189,40 @@ function checkInvariantsInBody(stmt: Statement, env: ExtendedEnv): void {
                 checkInvariantsInBody(stmt.else, env);
             }
             break;
-
-        case 'assignment':
-        case 'expr':
-            // Эти операторы не содержат инвариантов
-            break;
     }
 }
 
-function checkPredicate(pred: Predicate, env: ExtendedEnv): void {
-    // Приводим к any для доступа к kind
+function checkPredicate(pred: Predicate, env: PredicateEnv): void {
     const predAny = pred as any;
 
     switch (predAny.kind) {
         case 'quantifier':
-            // Для кванторов добавляем переменную в окружение
-            const quantEnv: ExtendedEnv = {
+            const quantEnv = {
+                ...env,
                 variables: new Set([...env.variables]),
-                funEnv: env.funEnv,
-                formulas: env.formulas
+                allowedVariables: new Set([...env.allowedVariables])
             };
             quantEnv.variables.add(predAny.varName);
+            quantEnv.allowedVariables.add(predAny.varName);
             checkPredicate(predAny.body, quantEnv);
             break;
 
         case 'formula':
-            // Для ссылок на формулы проверяем существование формулы и аргументы
-            const formulaRef = pred as unknown as FormulaRefPredicate;
+            const formulaRef = pred as FormulaRefPredicate;
             const formula = env.formulas.get(formulaRef.name);
             if (!formula) {
                 throw new Error(`Undefined formula "${formulaRef.name}"`);
             }
 
-            // Проверяем количество аргументов
             if (formulaRef.args.length !== formula.parameters.length) {
-                throw new Error(`Formula "${formulaRef.name}" expects ${formula.parameters.length} arguments but got ${formulaRef.args.length}`);
+                throw new Error(`Formula "${formulaRef.name}" expects ${formula.parameters.length} arguments, got ${formulaRef.args.length}`);
             }
 
-            // Проверяем каждый аргумент (используем базовую checkExpr из 8-й лабы)
             for (const arg of formulaRef.args) {
-                // checkExpr возвращает число (количество значений), но нам нужна только проверка
-                checkExpr(arg, env.variables, env.funEnv);
+                const argResult = checkExpr(arg, env.variables, env.funEnv);
+                if (argResult !== 1) {
+                    throw new Error("Formula arguments must be single-valued expressions");
+                }
             }
             break;
 
@@ -236,43 +236,31 @@ function checkPredicate(pred: Predicate, env: ExtendedEnv): void {
             checkPredicate(predAny.right, env);
             break;
 
-        case 'paren':
-            checkPredicate(predAny.inner, env);
+        case 'implies':
+            // a -> b ≡ ¬a ∨ b
+            const notLeft = { kind: 'not' as const, predicate: predAny.left };
+            const orPred = { kind: 'or' as const, left: notLeft, right: predAny.right };
+            checkPredicate(orPred, env);
             break;
 
         case 'comparison':
-            // Для сравнений используем базовую checkExpr
-            checkExpr(predAny.left, env.variables, env.funEnv);
-            checkExpr(predAny.right, env.variables, env.funEnv);
+            // checkExpr из 8-й лабы
+            const leftResult = checkExpr(predAny.left, env.variables, env.funEnv);
+            const rightResult = checkExpr(predAny.right, env.variables, env.funEnv);
+            if (leftResult !== 1 || rightResult !== 1) {
+                throw new Error("Comparison operands must be single-valued");
+            }
             break;
 
         case 'true':
         case 'false':
-            // Константы всегда валидны
             break;
 
-        case 'implies':
-            // a -> b ≡ ¬a ∨ b
-            const notLeft: Predicate = {
-                kind: 'not',
-                predicate: predAny.left
-            };
-            const orPred: Predicate = {
-                kind: 'or',
-                left: notLeft,
-                right: predAny.right
-            };
-            checkPredicate(orPred, env);
+        case 'paren':
+            checkPredicate(predAny.inner, env);
             break;
 
         default:
             throw new Error(`Unknown predicate kind: ${predAny.kind}`);
     }
 }
-
-// // Функция для проверки выражений в предикатах
-// function checkExpr(expr: Expr, varEnv: VarEnv, funEnv: FunEnv): number {
-//     // Просто делегируем базовой функции из 8-й лабы
-//     // Она вернет количество значений, но нам это не важно для предикатов
-//     return checkExpr(expr, varEnv, funEnv);
-// }
