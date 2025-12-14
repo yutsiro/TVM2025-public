@@ -1,11 +1,8 @@
 import { test } from "../../mark";
 import { Expr, parseExpr, printExpr } from "../../lab04";
-import { Expr, parseExpr, printExpr } from "../../lab04";
 
 import { simplify, cost } from "../src";
 import { basicIdentities, commutativeIdentities, toughIdentities } from './identities';
-
-
 
 const estimate = (source: string) => cost(parseExpr(source));
 
@@ -31,12 +28,6 @@ describe('Testing cost function', ()=>
 
 });
 
-const parseSimplifyAndCost = (source: string, identities: ()=>[Expr, Expr][]) => {
-
-    const simplified = simplify(parseExpr(source), identities());
-    console.log(`${source} => ${printExpr(simplified)}`);
-    return cost(simplified);
-} ;
 const parseSimplifyAndCost = (source: string, identities: ()=>[Expr, Expr][]) => {
 
     const simplified = simplify(parseExpr(source), identities());
