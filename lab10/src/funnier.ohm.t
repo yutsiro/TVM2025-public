@@ -1,4 +1,6 @@
-
 Funnier <: Funny {
-    // write rules here
+    Module := Formula* Function+
+
+    Formula =
+        variable "(" ParameterList ")" "=>" Predicate
 }

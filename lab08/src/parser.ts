@@ -3,236 +3,634 @@ import * as ast from './funny';
 import grammar, { FunnyActionDict } from './funny.ohm-bundle';
 import { MatchResult, Semantics } from 'ohm-js';
 
-export const getFunnyAst = {
-    ...getExprAst,
+function collectList<T>(node: any): T[] {
+    return node.asIteration().children.map((c: any) => c.parse() as T);
+}
 
-    Module(m) {
-        const func = m.children[0].parse();
-        return {
-            type: 'module',
-            functions: [func]
-        };
-    },
-    Parameter(name, colon, type: any) {
-        return {
-            type: 'param',
-            name: name.sourceString,
-            paramType: type.sourceString
-        } as ast.ParameterDef;
-    },
-    // ParameterList(first, comma, rest) {
-    //     if (first.sourceString === '') {
-    //         return [];
-    //     }
-    //     let params = [first.parse()];
-    //     for (const r of rest.children) {
-    //         params.push(r.children[1].parse());
-    //     }
-    //     return params;
-    // },
-    ParameterList(params) {
-        if(!params || params.sourceString === '') {
-            return [];
+export type FunEnv = Record<string, ast.FunctionDef>;
+export type VarEnv = Set<string>;
+
+function declareVar(env: VarEnv, name: string, what: string): void {
+    if (env.has(name)) {
+        throw new Error(`Redeclaration of ${what} "${name}".`);
+    }
+    env.add(name);
+}
+
+function ensureSingleValues(
+    counts: number[],
+    message: string
+): void {
+    if (counts.some((c) => c !== 1)) {
+        throw new Error(message);
+    }
+}
+
+function ensureArgCount(
+    name: string,
+    expected: number,
+    actual: number
+): void {
+    if (actual !== expected) {
+        throw new Error(`Function "${name}" expects ${expected} arguments but got ${actual}.`);
+    }
+}
+
+function ensureDeclared(
+    env: VarEnv,
+    name: string,
+    message: string
+): void {
+    if (!env.has(name)) {
+        throw new Error(`${message} "${name}".`);
+    }
+}
+
+export function parseOptional<T>(node: any, fallback: T): T {
+    return node.children.length > 0
+        ? (node.child(0).parse() as T)
+        : fallback;
+}
+
+export function checkModule(mod: ast.Module): void {
+    const funEnv: FunEnv = Object.create(null);
+
+    for (const fn of mod.functions) {
+        if (funEnv[fn.name]) {
+            throw new Error(`Duplicate function "${fn.name}".`);
         }
-        const iteration = params.asIteration();
-        const result = [];
+        funEnv[fn.name] = fn;
+    }
 
-        for (const child of iteration.children) {
-            result.push(child.parse());
-        }
+    for (const fn of mod.functions) {
+        checkFunction(fn, funEnv);
+    }
+}
 
-        return result;
-    },
+export function checkFunction(fn: ast.FunctionDef, funEnv: FunEnv): void {
+    const env: VarEnv = new Set<string>();
 
-    Uses(_uses, paramList) {
-        console.log('Uses parsing, paramList:', paramList.sourceString);
-        if(!paramList || paramList.sourceString === '') {
-            return [];
-        }
-        const iteration = paramList.asIteration();
-        const result = [];
+    for (const p of fn.parameters) {
+        declareVar(env, p.name, "parameter");
+    }
 
-        for (const child of iteration.children) {
-            result.push(child.parse());
-        }
+    for (const r of fn.returns) {
+        declareVar(env, r.name, "return value");
+    }
 
-        console.log('Uses result:', result);
-        return result;
-    },
-    Function(name, _lp, params, _rp, _ret, returns_list, uses, body) {
-        const paramList = params.sourceString === '' ? [] : params.parse();
-        const returnDef = returns_list.parse();
+    for (const l of fn.locals) {
+        declareVar(env, l.name, "local variable");
+    }
 
-        console.log('uses node:', uses);
-        console.log('uses.sourceString:', uses.sourceString);
-        // const parsedUses = uses.parse();
-        // console.log('parsedUses:', parsedUses);
-        // console.log('parsedUses type:', typeof parsedUses);
-        // console.log('Array.isArray(parsedUses):', Array.isArray(parsedUses));
+    checkStmt(fn.body, env, funEnv);
+}
 
-        // const localList = uses.sourceString === '' ? [] : parsedUses;
-        // console.log('localList:', localList);
-
-        let localList: ast.ParameterDef[] = [];
-
-        if (uses.sourceString !== '') {
-            // uses.parse() возвращает [result], где result - массив параметров
-            const parsed = uses.parse();
-            if (Array.isArray(parsed) && parsed.length > 0) {
-                // Берем первый (и единственный) элемент - это массив параметров
-                localList = parsed[0] as ast.ParameterDef[];
+export function checkStmt(stmt: ast.Statement, env: VarEnv, funEnv: FunEnv): void {
+    switch (stmt.type) {
+        case "assignment": {
+            for (const lv of stmt.targets) {
+                checkLValue(lv, env, funEnv);
             }
+
+            let produced = 0;
+            for (const ex of stmt.exprs) {
+                produced += checkExpr(ex, env, funEnv);
+            }
+            const needed = stmt.targets.length;
+            if (produced !== needed) {
+                throw new Error(`Assignment arity mismatch: ${needed} target(s) but ${produced} value(s) on right-hand side.`);
+            }
+            return;
         }
 
-        const bodyStmt = body.parse();
+        case "block":
+            for (const s of stmt.statements) {
+                checkStmt(s, env, funEnv);
+            }
+            return;
+
+        case "if":
+            checkCondition(stmt.condition, env, funEnv);
+            checkStmt(stmt.then, env, funEnv);
+            if (stmt.else) {
+                checkStmt(stmt.else, env, funEnv);
+            }
+            return;
+
+        case "while":
+            checkCondition(stmt.condition, env, funEnv);
+            checkStmt(stmt.body, env, funEnv);
+            return;
+
+        case "expr":
+            checkExpr(stmt.expr, env, funEnv);
+            return;
+    }
+}
+
+export function checkLValue(lv: ast.LValue, env: VarEnv, funEnv: FunEnv): void {
+    switch (lv.type) {
+        case "lvar":
+            ensureDeclared(
+                env,
+                lv.name,
+                "Assignment to undeclared variable"
+            );
+            return;
+
+        case "larr":
+            ensureDeclared(
+                env,
+                lv.name,
+                "Assignment to undeclared array"
+            );
+            checkExpr(lv.index, env, funEnv);
+            return;
+    }
+}
+
+export function checkFuncCall(
+    call: ast.FuncCallExpr,
+    env: VarEnv,
+    funEnv: FunEnv
+): number {
+    const { name, args } = call;
+
+    if (name === "length") {
+        ensureArgCount("length", 1, args.length);
+
+        const argCount = checkExpr(args[0], env, funEnv);
+        ensureSingleValues(
+            [argCount],
+            "Function arguments must be single-valued."
+        );
+
+        return 1;
+    }
+
+    const fn = funEnv[name];
+    if (!fn) {
+        throw new Error(`Call to unknown function "${name}".`);
+    }
+
+    ensureArgCount(name, fn.parameters.length, args.length);
+
+    for (const a of args) {
+        const c = checkExpr(a, env, funEnv);
+        ensureSingleValues(
+            [c],
+            "Function arguments must be single-valued."
+        );
+    }
+
+    return fn.returns.length;
+}
+
+export function checkExpr(e: ast.Expr, env: VarEnv, funEnv: FunEnv): number {
+    const kind = (e as any).kind || (e as any).type;
+    switch (kind) {
+        case "number":
+            return 1;
+
+        case "variable":
+        case "var":
+            const varName = (e as any).name;
+            ensureDeclared(
+                env,
+                varName,
+                "Use of undeclared variable"
+            );
+            return 1;
+
+        case "unary":
+        case "neg":
+            const arg = (e as any).argument || (e as any).arg;
+            return checkExpr(arg, env, funEnv);
+
+        case "binary":
+        case "bin": {
+            const left = (e as any).left;
+            const right = (e as any).right;
+            const lCount = checkExpr(left, env, funEnv);
+            const rCount = checkExpr(right, env, funEnv);
+            ensureSingleValues(
+                [lCount, rCount],
+                "Operators can only be applied to single-valued expressions."
+            );
+            return 1;
+        }
+
+        case "funccall":
+            return checkFuncCall(e as any, env, funEnv);
+
+        case "arraccess": {
+            const arrName = (e as any).name;
+            ensureDeclared(
+                env,
+                arrName,
+                "Access to undeclared array"
+            );
+            const idx = (e as any).index;
+            const idxCount = checkExpr(idx, env, funEnv);
+            ensureSingleValues(
+                [idxCount],
+                "Array index expression must produce exactly one value."
+            );
+            return 1;
+        }
+        default:
+            throw new Error(`Unknown expression kind/type: ${kind} in ${JSON.stringify(e)}`);
+    }
+}
+
+export function checkCondition(
+    cond: ast.Condition,
+    env: VarEnv,
+    funEnv: FunEnv
+): void {
+    switch (cond.kind) {
+        case "true":
+        case "false":
+            return;
+
+        case "comparison": {
+            const lCount = checkExpr(cond.left, env, funEnv);
+            const rCount = checkExpr(cond.right, env, funEnv);
+            ensureSingleValues(
+                [lCount, rCount],
+                "Comparison operands must be single-valued."
+            );
+            return;
+        }
+
+        case "not":
+            checkCondition(cond.condition, env, funEnv);
+            return;
+
+        case "and":
+        case "or":
+        case "implies":
+            checkCondition(cond.left, env, funEnv);
+            checkCondition(cond.right, env, funEnv);
+            return;
+
+        case "paren":
+            checkCondition(cond.inner, env, funEnv);
+            return;
+    }
+}
+
+function foldLogicalChain<T>(
+    first: any,
+    rest: any,
+    makeNode: (left: T, right: T) => T
+): T {
+    let node = first.parse() as T;
+    for (const r of rest.children) {
+        const rhs = r.parse() as T;
+        node = makeNode(node, rhs);
+    }
+    return node;
+}
+
+function repeatPrefix<T>(
+    nots: any,
+    base: any,
+    makeNode: (inner: T) => T
+): T {
+    let node = base.parse() as T;
+    for (let i = 0; i < nots.children.length; i++) {
+        node = makeNode(node);
+    }
+    return node;
+}
+
+function makeComparisonNode(
+    leftNode: any,
+    rightNode: any,
+    op: ast.ComparisonCond["op"]
+): ast.ComparisonCond {
+    return {
+        kind: "comparison",
+        left: leftNode.parse() as ast.Expr,
+        op,
+        right: rightNode.parse() as ast.Expr,
+    };
+}
+
+export const getFunnyAst = {
+    ...(getExprAst as any),
+
+    Module(funcs) {
+        const functions = funcs.children.map(
+            (f: any) => f.parse() as ast.FunctionDef
+        );
         return {
-            type: 'fun',
+            type: "module",
+            functions,
+        } as ast.Module;
+    },
+
+    Function(name, _lp, params, _rp, _preOpt, retSpec, _postOpt, usesOpt, stmt) {
+        return {
+            type: "fun",
             name: name.sourceString,
-            parameters: paramList,
-            returns: [returnDef],
-            locals: localList,
-            body: bodyStmt
+            parameters: params.parse() as ast.ParameterDef[],
+            returns: retSpec.parse() as ast.ParameterDef[],
+            locals: parseOptional<ast.ParameterDef[]>(usesOpt, []),
+            body: stmt.parse() as ast.Statement,
         } as ast.FunctionDef;
     },
-    // // Type(t) {
-    // //     return t.sourceString;
-    // // },
-    Assignment(varName, _eq, expr, _semi) {
-        return {
-            type: 'assignment',
-            varName: varName.sourceString,
-            expression: expr.parse()
-        } as ast.Assignment;
+
+    Uses(_uses, params) {
+        return params.parse() as ast.ParameterDef[];
     },
-    Block(_open, statements, _close) {
-        const stmts = statements.children.map((child: any) => child.parse());
+
+    Ret(_returns, params) {
+        return params.parse() as ast.ParameterDef[];
+    },
+
+    ParameterList(list) {
+        if (list.numChildren === 0) {
+            return [];
+        }
+        return collectList<ast.ParameterDef>(list);
+    },
+
+    Parameter(name, _colon, type) {
         return {
-          type: 'block',
-          statements: stmts
+            type: "param",
+            name: name.sourceString,
+            paramType: type.sourceString,
+        } as ast.ParameterDef;
+    },
+
+    Type_array(_int) {
+        return "int[]" as const;
+    },
+
+    Type_int(_int) {
+        return "int" as const;
+    },
+
+    ArgList(list) {
+        if (list.numChildren === 0) {
+            return [];
+        }
+        return collectList<ast.Expr>(list);
+    },
+
+    Block(_lb, stmts, _rb) {
+        return {
+            type: "block",
+            statements: stmts.children.map((s: any) => s.parse() as ast.Statement),
         } as ast.Block;
     },
-    Statement(stmt) {
-        return stmt.parse();
+
+    Statement_expr(e, _semi) {
+        return {
+            type: "expr",
+            expr: e.parse() as ast.Expr,
+        } as ast.ExprStmt;
     },
-    _iter(...children) {
-        return children.map((c: any) => c.parse());
+
+    While(_while, _lp, cond, _rp, invOpt, body) {
+        return {
+            type: "while",
+            condition: cond.parse() as ast.Condition,
+            invariant: parseOptional<ast.Predicate | null>(invOpt, null),
+            body: body.parse() as ast.Statement,
+        } as ast.WhileStmt;
     },
-    _terminal() {
-        return this.sourceString;
-    }
+
+    Invariant(_inv, pred) {
+        return pred.parse() as ast.Predicate;
+    },
+
+    If(_if, _lp, cond, _rp, thenStmt, _elseKwOpt, elseStmtOpt) {
+        return {
+            type: "if",
+            condition: cond.parse() as ast.Condition,
+            then: thenStmt.parse() as ast.Statement,
+            else: parseOptional<ast.Statement | null>(elseStmtOpt, null),
+        } as ast.IfStmt;
+    },
+
+    Assignment_tuple(lvalues, _eq, exprs, _semi) {
+        return {
+            type: "assignment",
+            targets: lvalues.parse() as ast.LValue[],
+            exprs: exprs.parse() as ast.Expr[],
+        } as ast.Assignment;
+    },
+
+    Assignment_simple(lvalue, _eq, expr, _semi) {
+        return {
+            type: "assignment",
+            targets: [lvalue.parse() as ast.LValue],
+            exprs: [expr.parse() as ast.Expr],
+        } as ast.Assignment;
+    },
+
+    LValueList(list) {
+        return collectList<ast.LValue>(list);
+    },
+
+    ExprList(list) {
+        if (list.numChildren === 0) {
+            return [];
+        }
+        return collectList<ast.Expr>(list);
+    },
+
+    LValue_array(arr) {
+        const access = arr.parse() as ast.ArrAccessExpr;
+        return {
+            type: "larr",
+            name: access.name,
+            index: access.index,
+        } as ast.ArrLValue;
+    },
+
+    LValue_var(name) {
+        return {
+            type: "lvar",
+            name: name.sourceString,
+        } as ast.VarLValue;
+    },
+
+    FunctionCall(name, _lp, argsNode, _rp) {
+        return {
+            type: "funccall",
+            name: name.sourceString,
+            args: argsNode.parse() as ast.Expr[],
+        } as ast.FuncCallExpr;
+    },
+
+    ArrayAccess(name, _lb, index, _rb) {
+        return {
+            type: "arraccess",
+            name: name.sourceString,
+            index: index.parse() as ast.Expr,
+        } as ast.ArrAccessExpr;
+    },
+
+    OrCond(first, _ops, rest) {
+        return foldLogicalChain<ast.Condition>(first, rest, (left, right) => ({
+            kind: "or",
+            left,
+            right,
+        } as ast.OrCond));
+    },
+
+    AndCond(first, _ops, rest) {
+        return foldLogicalChain<ast.Condition>(first, rest, (left, right) => ({
+            kind: "and",
+            left,
+            right,
+        } as ast.AndCond));
+    },
+
+    NotCond(nots, atom) {
+        return repeatPrefix<ast.Condition>(nots, atom, (condition) => ({
+            kind: "not",
+            condition,
+        } as ast.NotCond));
+    },
+
+    AtomCond_true(_t) {
+        return { kind: "true" } as ast.TrueCond;
+    },
+
+    AtomCond_false(_f) {
+        return { kind: "false" } as ast.FalseCond;
+    },
+
+    AtomCond_paren(_lp, cond, _rp) {
+        return {
+            kind: "paren",
+            inner: cond.parse() as ast.Condition,
+        } as ast.ParenCond;
+    },
+
+    Comparison_eq(left, _op, right) {
+        return makeComparisonNode(left, right, "==");
+    },
+
+    Comparison_neq(left, _op, right) {
+        return makeComparisonNode(left, right, "!=");
+    },
+
+    Comparison_ge(left, _op, right) {
+        return makeComparisonNode(left, right, ">=");
+    },
+
+    Comparison_le(left, _op, right) {
+        return makeComparisonNode(left, right, "<=");
+    },
+
+    Comparison_gt(left, _op, right) {
+        return makeComparisonNode(left, right, ">");
+    },
+
+    Comparison_lt(left, _op, right) {
+        return makeComparisonNode(left, right, "<");
+    },
+
+    ImplyPred_imply(orPred, _arrow, rest) {
+        const left = orPred.parse() as ast.Predicate;
+        const right = rest.parse() as ast.Predicate;
+
+        const notLeft: ast.NotPred = {
+            kind: "not",
+            predicate: left,
+        };
+        return {
+            kind: "or",
+            left: notLeft,
+            right,
+        } as ast.OrPred;
+    },
+
+    OrPred(first, _ops, rest) {
+        return foldLogicalChain<ast.Predicate>(first, rest, (left, right) => ({
+            kind: "or",
+            left,
+            right,
+        } as ast.OrPred));
+    },
+
+    AndPred(first, _ops, rest) {
+        return foldLogicalChain<ast.Predicate>(first, rest, (left, right) => ({
+            kind: "and",
+            left,
+            right,
+        } as ast.AndPred));
+    },
+
+    NotPred(nots, atom) {
+        return repeatPrefix<ast.Predicate>(nots, atom, (predicate) => ({
+            kind: "not",
+            predicate,
+        } as ast.NotPred));
+    },
+
+    AtomPred_true(_t) {
+        return { kind: "true" } as ast.TrueCond;
+    },
+
+    AtomPred_false(_f) {
+        return { kind: "false" } as ast.FalseCond;
+    },
+
+    AtomPred_paren(_lp, pred, _rp) {
+        return {
+            kind: "paren",
+            inner: pred.parse() as ast.Predicate,
+        } as ast.ParenPred;
+    },
+
+    Quantifier(qTok, _lp, paramNode, _bar, body, _rp) {
+        const quant = qTok.sourceString as "forall" | "exists";
+        const param = paramNode.parse() as ast.ParameterDef;
+        const varName = param.name;
+        const varType = param.paramType;
+        return {
+            kind: "quantifier",
+            quant,
+            varName,
+            varType,
+            body: body.parse() as ast.Predicate,
+        } as ast.Quantifier;
+    },
+
+    FormulaRef(name, _lp, params, _rp) {
+        return {
+            kind: "formula",
+            name: name.sourceString,
+            parameters: params.parse() as ast.ParameterDef[],
+        } as ast.FormulaRef;
+    },
 } satisfies FunnyActionDict<any>;
 
 export const semantics: FunnySemanticsExt = grammar.Funny.createSemantics() as FunnySemanticsExt;
 semantics.addOperation("parse()", getFunnyAst);
 
-export interface FunnySemanticsExt extends Semantics
-{
-    (match: MatchResult): FunnyActionsExt
+export interface FunnySemanticsExt extends Semantics {
+    (match: MatchResult): FunnyActionsExt;
 }
-interface FunnyActionsExt
-{
+interface FunnyActionsExt {
     parse(): ast.Module;
 }
 
-function checkSemantics(module: ast.Module) {
-    for (const func of module.functions) {
-        console.log('Checking function:', func.name);
-        console.log('Parameters:', func.parameters.map(p => ({name: p.name, type: p.paramType})));
-        console.log('Returns:', func.returns.map(r => ({name: r.name, type: r.paramType})));
-        console.log('Locals:', func.locals.map(l => ({name: l?.name, type: l?.paramType})));
+export function parseFunny(source: string): ast.Module {
+    const matchResult = grammar.Funny.match(source, "Module");
 
-        console.log('Locals:', func.locals);
-        console.log('Locals length:', func.locals.length);
-        console.log('First local:', func.locals[0]);
-
-
-        const declared = new Set<string>();
-
-        // Check parameters
-        for (const param of func.parameters) {
-            console.log('Checking parameter:', param.name);
-            if (declared.has(param.name)) {
-                throw new Error(`Duplicate parameter: ${param.name}`);
-            }
-            declared.add(param.name);
-        }
-
-        // Check locals
-        for (const local of func.locals) {
-            console.log('Checking local:', local?.name, 'full object:', local);
-            if (!local?.name) {
-                throw new Error(`Local variable has no name: ${JSON.stringify(local)}`);
-            }
-            if (declared.has(local.name)) {
-                throw new Error(`Duplicate local variable: ${local.name}`);
-            }
-            declared.add(local.name);
-        }
-
-        // Check return variable
-        for (const ret of func.returns) {
-            console.log('Checking return:', ret.name);
-            if (declared.has(ret.name)) {
-                throw new Error(`Return variable conflicts with existing: ${ret.name}`);
-            }
-            declared.add(ret.name);
-        }
-
-        // Check variable usage in body
-        function checkStatement(stmt: ast.Statement) {
-            if (stmt.type === 'assignment') {
-                // Check if variable is declared
-                if (!declared.has(stmt.varName)) {
-                    throw new Error(`Undeclared variable: ${stmt.varName}`);
-                }
-                // Check expression variables
-                checkExpression(stmt.expression);
-            } else if (stmt.type === 'block') {
-                for (const s of stmt.statements) {
-                    checkStatement(s);
-                }
-            }
-        }
-
-        function checkExpression(expr: any) {
-            if (expr.kind === 'variable') {
-                if (!declared.has(expr.name)) {
-                    throw new Error(`Undeclared variable in expression: ${expr.name}`);
-                }
-            } else if (expr.kind === 'unary') {
-                checkExpression(expr.argument);
-            } else if (expr.kind === 'binary') {
-                checkExpression(expr.left);
-                checkExpression(expr.right);
-            }
-        }
-
-        checkStatement(func.body);
-    }
-}
-
-export function parseFunny(source: string): ast.Module
-{
-    console.log("Parsing source:", source);
-    console.log("Source lines:");
-    source.split('\n').forEach((line, i) => console.log(`${i+1}: ${line}`));
-
-    const match = grammar.Funny.match(source, "Module");
-
-    console.log("Match result:", match.succeeded() ? "SUCCESS" : "FAILED");
-    console.log("Match message:", match.message);
-
-    if (match.failed()) {
-        throw new Error(`Syntax error: ${match.message}`);
+    if (matchResult.failed()) {
+        throw new SyntaxError(matchResult.message);
     }
 
-    const moduleAst = semantics(match).parse();
-    try {
-        checkSemantics(moduleAst);
-    } catch (error) {
-        throw error;
-    }
-
-
-    return moduleAst;
+    const ast_module = semantics(matchResult).parse();
+    checkModule(ast_module);
+    return ast_module;
 }
