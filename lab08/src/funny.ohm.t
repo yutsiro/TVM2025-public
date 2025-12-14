@@ -3,12 +3,12 @@ Funny <: Arithmetic {
     Module = Function+
 
     Function =
-        variable "(" ParameterList? ")"
+        variable "(" ParameterList ")"
         "returns" Parameter
         Uses?
         Statement
 
-    ParameterList = Parameter ("," Parameter)*
+    ParameterList = ListOf<Parameter, ",">
     Parameter = variable ":" "int"
     Uses = "uses" ParameterList
     Statement = Assignment | Block

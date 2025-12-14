@@ -20,26 +20,70 @@ export const getFunnyAst = {
             paramType: type.sourceString
         } as ast.ParameterDef;
     },
-    ParameterList(first, comma, rest) {
-        if (first.sourceString === '') {
+    // ParameterList(first, comma, rest) {
+    //     if (first.sourceString === '') {
+    //         return [];
+    //     }
+    //     let params = [first.parse()];
+    //     for (const r of rest.children) {
+    //         params.push(r.children[1].parse());
+    //     }
+    //     return params;
+    // },
+    ParameterList(params) {
+        if(!params || params.sourceString === '') {
             return [];
         }
-        const params = [first.parse()];
-        for (const r of rest.children) {
-            params.push(r.children[1].parse());
+        const iteration = params.asIteration();
+        const result = [];
+
+        for (const child of iteration.children) {
+            result.push(child.parse());
         }
-        return params;
+
+        return result;
     },
+
     Uses(_uses, paramList) {
         console.log('Uses parsing, paramList:', paramList.sourceString);
-        const locals = paramList.parse();
-        console.log('Uses result:', locals);
-        return locals;
+        if(!paramList || paramList.sourceString === '') {
+            return [];
+        }
+        const iteration = paramList.asIteration();
+        const result = [];
+
+        for (const child of iteration.children) {
+            result.push(child.parse());
+        }
+
+        console.log('Uses result:', result);
+        return result;
     },
     Function(name, _lp, params, _rp, _ret, returns_list, uses, body) {
-        const paramList = params.parse();
+        const paramList = params.sourceString === '' ? [] : params.parse();
         const returnDef = returns_list.parse();
-        const localList = uses.parse() || [];
+
+        console.log('uses node:', uses);
+        console.log('uses.sourceString:', uses.sourceString);
+        // const parsedUses = uses.parse();
+        // console.log('parsedUses:', parsedUses);
+        // console.log('parsedUses type:', typeof parsedUses);
+        // console.log('Array.isArray(parsedUses):', Array.isArray(parsedUses));
+
+        // const localList = uses.sourceString === '' ? [] : parsedUses;
+        // console.log('localList:', localList);
+
+        let localList: ast.ParameterDef[] = [];
+
+        if (uses.sourceString !== '') {
+            // uses.parse() возвращает [result], где result - массив параметров
+            const parsed = uses.parse();
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                // Берем первый (и единственный) элемент - это массив параметров
+                localList = parsed[0] as ast.ParameterDef[];
+            }
+        }
+
         const bodyStmt = body.parse();
         return {
             type: 'fun',
@@ -96,6 +140,11 @@ function checkSemantics(module: ast.Module) {
         console.log('Parameters:', func.parameters.map(p => ({name: p.name, type: p.paramType})));
         console.log('Returns:', func.returns.map(r => ({name: r.name, type: r.paramType})));
         console.log('Locals:', func.locals.map(l => ({name: l?.name, type: l?.paramType})));
+
+        console.log('Locals:', func.locals);
+        console.log('Locals length:', func.locals.length);
+        console.log('First local:', func.locals[0]);
+
 
         const declared = new Set<string>();
 
