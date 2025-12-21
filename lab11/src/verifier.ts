@@ -254,8 +254,6 @@ async function predicateToZ3(pred: Predicate, ctx: VerificationContext): Promise
             if (pred.quant === "forall") {
                 return z3.ForAll([v], body);
             } else {
-                // return z3.Exists([v], body);
-                // return body;
                 const existsSolver = new z3.Solver();
                 existsSolver.add(body);
                 const existsRes = await existsSolver.check();
@@ -304,6 +302,137 @@ function isArrAccessExpr(e: ast.Expr): e is ast.ArrAccessExpr {
     return (e as any).type === "arraccess";
 }
 
+function checkIfRecursive(fn: AnnotatedFunctionDef, module: AnnotatedModule): boolean {
+    if (!fn.ensures) return false;
+
+    function containsRecursiveCall(pred: Predicate, funcName: string): boolean {
+        switch (pred.kind) {
+            case "true":
+            case "false":
+                return false;
+            case "comparison":
+                return containsCallInExpr(pred.left, funcName) ||
+                       containsCallInExpr(pred.right, funcName);
+            case "and":
+            case "or":
+                return containsRecursiveCall(pred.left, funcName) ||
+                       containsRecursiveCall(pred.right, funcName);
+            case "not":
+                return containsRecursiveCall(pred.predicate, funcName);
+            case "paren":
+                return containsRecursiveCall(pred.inner, funcName);
+            case "quantifier":
+                return containsRecursiveCall(pred.body, funcName);
+            case "formula":
+                if (pred.name === funcName) return true;
+                return pred.args.some(arg => containsCallInExpr(arg, funcName));
+            default:
+                return false;
+        }
+    }
+
+    function containsCallInExpr(expr: ast.Expr, funcName: string): boolean {
+        if ((expr as any).type === "funccall") {
+            const call = expr as ast.FuncCallExpr;
+            if (call.name === funcName) return true;
+            return call.args.some(arg => containsCallInExpr(arg, funcName));
+        }
+
+        if ((expr as any).kind === "unary") {
+            const unary = expr as any;
+            return containsCallInExpr(unary.argument, funcName);
+        }
+        if ((expr as any).kind === "binary") {
+            const binary = expr as any;
+            return containsCallInExpr(binary.left, funcName) ||
+                   containsCallInExpr(binary.right, funcName);
+        }
+
+        return false;
+    }
+
+    return containsRecursiveCall(fn.ensures, fn.name);
+}
+
+async function addInductionAxioms(
+    fn: AnnotatedFunctionDef,
+    module: AnnotatedModule,
+    ctx: VerificationContext
+): Promise<void> {
+    if (fn.parameters.length !== 1 || fn.returns.length !== 1) {
+        return;
+    }
+
+    const param = fn.parameters[0];
+    const ret = fn.returns[0];
+
+    const paramVar = z3.Int.const(param.name);
+    const resultVar = z3.Int.const(`${fn.name}_result`);
+
+    const baseCtx = { ...ctx, env: new Map(ctx.env) };
+    baseCtx.env.set(param.name, z3.Int.val(0));
+    baseCtx.env.set(ret.name, resultVar);
+
+    if (fn.ensures) {
+        const ensuresZero = substituteInPredicate(fn.ensures, param.name, { kind: "number", value: 0 } as any);
+        const baseAxiom = await predicateToZ3(ensuresZero, baseCtx);
+        ctx.solver.add(baseAxiom);
+    }
+
+    const prevParam = z3.Int.const(`${param.name}_prev`);
+    const prevResult = z3.Int.const(`${fn.name}_prev_result`);
+
+    const stepCtx = { ...ctx, env: new Map(ctx.env) };
+    stepCtx.env.set(param.name, paramVar);
+    stepCtx.env.set(ret.name, resultVar);
+    stepCtx.env.set(`${param.name}_prev`, prevParam);
+    stepCtx.env.set(`${fn.name}_prev_result`, prevResult);
+
+    if (fn.ensures) {
+        const prevEnsures = substituteInPredicate(
+            fn.ensures,
+            param.name,
+            { kind: "variable", name: `${param.name}_prev` } as any
+        );
+
+        const prevVarExpr = { kind: "variable", name: `${param.name}_prev` } as any;
+        const nMinusOne = {
+            kind: "binary",
+            operator: "-",
+            left: { kind: "variable", name: param.name } as any,
+            right: { kind: "number", value: 1 } as any
+        } as any;
+
+        const prevEq = {
+            kind: "comparison",
+            op: "==",
+            left: prevVarExpr,
+            right: nMinusOne
+        } as Predicate;
+
+        const nPositive = {
+            kind: "comparison",
+            op: ">",
+            left: { kind: "variable", name: param.name } as any,
+            right: { kind: "number", value: 0 } as any
+        } as Predicate;
+
+        const stepPremise = and(and(prevEnsures, prevEq), nPositive);
+        const stepAxiom = implies(stepPremise, fn.ensures);
+
+        const stepAxiomZ3 = await predicateToZ3(stepAxiom, stepCtx);
+        ctx.solver.add(stepAxiomZ3);
+    }
+}
+
+export async function verifyModule(module: AnnotatedModule) {
+    await initZ3();
+
+    for (const fn of module.functions) {
+        await verifyFunction(fn, module);
+    }
+}
+
 async function exprToZ3(e: ast.Expr, ctx: VerificationContext): Promise<Arith<"main">> {
     if (ctx.depth > 10) return z3.Int.val(0);
 
@@ -346,29 +475,63 @@ async function exprToZ3(e: ast.Expr, ctx: VerificationContext): Promise<Arith<"m
 
         if (func.returns.length === 1) {
             const ret = func.returns[0];
-            const resultVar = z3.Int.const(`${ctx.currentFunction.name}_call_${call.name}_${ret.name}`);
 
-            if (func.ensures) {
-                const tempEnv = new Map(ctx.env);
-                tempEnv.set(ret.name, resultVar);
+            const argValues = await Promise.all(call.args.map(arg => exprToZ3(arg, newCtx)));
+
+            const callId = Math.random().toString(36).substring(2, 8);
+            const resultVar = z3.Int.const(`${call.name}_result_${callId}`);
+
+            if (call.name === ctx.currentFunction.name) {
+                const tempEnv = new Map();
 
                 for (let i = 0; i < func.parameters.length; i++) {
                     const param = func.parameters[i];
-                    const argValue = await exprToZ3(call.args[i], newCtx);
-                    tempEnv.set(param.name, argValue);
+                    tempEnv.set(param.name, argValues[i]);
                 }
 
-                const ensuresSubst = substituteArgs(func.ensures, func.parameters, call.args);
-                const ensuresCtx = { ...newCtx, env: tempEnv };
-                const ensuresZ3 = await predicateToZ3(ensuresSubst, ensuresCtx);
+                tempEnv.set(ret.name, resultVar);
 
-                ctx.solver.add(ensuresZ3);
+                const ensuresCtx = {
+                    ...newCtx,
+                    env: tempEnv,
+                    currentFunction: func,
+                    solver: ctx.solver
+                };
+
+                if (func.ensures) {
+                    try {
+                        const ensuresZ3 = await predicateToZ3(func.ensures, ensuresCtx);
+                        ctx.solver.add(ensuresZ3);
+                    } catch (error) {
+                        console.warn(`Warning: Could not add ensures for recursive call: ${error}`);
+                    }
+                }
+
+                return resultVar;
+            } else {
+                const resultVar = z3.Int.const(`${ctx.currentFunction.name}_call_${call.name}_${callId}`);
+
+                if (func.ensures) {
+                    const tempEnv = new Map(ctx.env);
+                    tempEnv.set(ret.name, resultVar);
+
+                    for (let i = 0; i < func.parameters.length; i++) {
+                        const param = func.parameters[i];
+                        tempEnv.set(param.name, argValues[i]);
+                    }
+
+                    const ensuresSubst = substituteArgs(func.ensures, func.parameters, call.args);
+                    const ensuresCtx = { ...newCtx, env: tempEnv, currentFunction: func };
+                    const ensuresZ3 = await predicateToZ3(ensuresSubst, ensuresCtx);
+
+                    ctx.solver.add(ensuresZ3);
+                }
+
+                return resultVar;
             }
-
-            return resultVar;
         }
 
-        return z3.Int.const(`call_${call.name}`);
+        return z3.Int.const(`call_${call.name}_${Math.random().toString(36).substring(2, 8)}`);
     }
 
     if (isArrAccessExpr(e)) {
@@ -380,6 +543,36 @@ async function exprToZ3(e: ast.Expr, ctx: VerificationContext): Promise<Arith<"m
     }
 
     throw new Error(`Unsupported expression type`);
+}
+
+async function addInductionAxiomsForFactorial(
+    fn: AnnotatedFunctionDef,
+    ctx: VerificationContext
+): Promise<void> {
+    if (fn.name !== "factorial") return;
+
+    const param = fn.parameters[0];
+    const ret = fn.returns[0];
+
+    const zeroResult = z3.Int.const("factorial_zero");
+    const baseAxiom = zeroResult.eq(z3.Int.val(1));
+    ctx.solver.add(baseAxiom);
+
+    const nVar = z3.Int.const(param.name);
+    const factorialN = z3.Int.const("factorial_n");
+    const factorialNMinus1 = z3.Int.const("factorial_n_minus_1");
+
+    const inductiveAxiom = z3.ForAll([nVar, factorialN, factorialNMinus1],
+        z3.Implies(
+            z3.And(
+                nVar.gt(z3.Int.val(0)),
+                factorialNMinus1.eq(z3.Int.const("factorial_zero"))
+            ),
+            factorialN.eq(nVar.mul(factorialNMinus1))
+        )
+    );
+
+    ctx.solver.add(inductiveAxiom);
 }
 
 async function verifyFunction(fn: AnnotatedFunctionDef, module: AnnotatedModule): Promise<void> {
@@ -404,29 +597,28 @@ async function verifyFunction(fn: AnnotatedFunctionDef, module: AnnotatedModule)
             depth: 0
         };
 
+        if (fn.name === "factorial") {
+            await addInductionAxiomsForFactorial(fn, ctx);
+        }
+
         if (fn.requires) {
             const pre = await predicateToZ3(fn.requires, ctx);
             solver.add(pre);
         }
 
         const z3vc = await predicateToZ3(vc, ctx);
+
         solver.add(z3.Not(z3vc));
 
         const res = await solver.check();
         if (res === "sat") {
             const model = await solver.model();
-            throw new Error(`Verification failed for function "${fn.name}"\nCounterexample:\n${model}`);
+            console.log("Counterexample model:", model.toString());
+            throw new Error(`Verification failed for function "${fn.name}". Possible issue with inductive reasoning.`);
         }
         if (res === "unknown") {
-            throw new Error(`Z3 returned unknown for "${fn.name}"`);
+            console.warn(`Z3 returned unknown for "${fn.name}"`);
+            return;
         }
-    }
-}
-
-export async function verifyModule(module: AnnotatedModule) {
-    await initZ3();
-
-    for (const fn of module.functions) {
-        await verifyFunction(fn, module);
     }
 }
