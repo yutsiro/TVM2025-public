@@ -1,8 +1,8 @@
 import { desiredMark } from '../../desiredMark.json';
 import { addIntGroup, testRe } from '../../lab08/tests/testFilesInFolder';
 import { DesiredMark } from '../../mark';
-import { 
-    readFileSync, 
+import {
+    readFileSync,
     readdirSync  } from 'fs';
 import { join as pathJoin, parse as pathParse} from 'path';
 

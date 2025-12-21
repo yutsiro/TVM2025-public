@@ -237,7 +237,6 @@ function checkPredicate(pred: Predicate, env: PredicateEnv): void {
             break;
 
         case 'implies':
-            // a -> b ≡ ¬a ∨ b
             const notLeft = { kind: 'not' as const, predicate: predAny.left };
             const orPred = { kind: 'or' as const, left: notLeft, right: predAny.right };
             checkPredicate(orPred, env);

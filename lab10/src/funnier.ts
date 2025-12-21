@@ -7,7 +7,6 @@ import {
     Expr
 } from '../../lab08/src/funny';
 
-// Расширяем базовые типы
 export interface AnnotatedModule extends BaseModule {
     formulas: FormulaDef[];
     functions: AnnotatedFunctionDef[];
@@ -18,7 +17,6 @@ export interface AnnotatedFunctionDef extends BaseFunctionDef {
     ensures: Predicate | null;
 }
 
-// ДОБАВЛЯЕМ типы для верификации
 export type Predicate =
     | Quantifier
     | FormulaRefPredicate
