@@ -3,7 +3,7 @@ import { AnnotatedModule, AnnotatedFunctionDef, Predicate, FormulaDef } from "..
 import * as ast from "../../lab08/src/funny";
 import * as arith from "../../lab04/src/ast";
 
-import { printFuncCall, printFuncCallSimple } from "./printFuncCall";
+import { printFuncCall } from "./printFuncCall";
 
 let z3anchor: any = null;
 let z3: Context<"main">;
@@ -476,7 +476,7 @@ async function exprToZ3(e: ast.Expr, ctx: VerificationContext): Promise<Arith<"m
             return z3.Int.const(`call_${call.name}`);
         }
 
-        if (func.returns.length === 1) {
+        if (func.returns.length === 1) {//одно возвращаемое значение -> вычисляем аргс, создаем вар для результата вызова
             const ret = func.returns[0];
 
             const argValues = await Promise.all(call.args.map(arg => exprToZ3(arg, newCtx)));
@@ -484,7 +484,7 @@ async function exprToZ3(e: ast.Expr, ctx: VerificationContext): Promise<Arith<"m
             const callId = Math.random().toString(36).substring(2, 8);
             const resultVar = z3.Int.const(`${call.name}_result_${callId}`);
 
-            if (call.name === ctx.currentFunction.name) {
+            if (call.name === ctx.currentFunction.name) {//рекурсия
                 const tempEnv = new Map();
 
                 for (let i = 0; i < func.parameters.length; i++) {
@@ -570,7 +570,7 @@ async function addInductionAxiomsForRecursive(
                 factorialNMinus1.eq(z3.Int.const("factorial_zero"))
             ),
             factorialN.eq(nVar.mul(factorialNMinus1))
-        )
+        )// n > 0 & n-1==0  ->  f=f-1
     );
 
     ctx.solver.add(inductiveAxiom);
@@ -625,7 +625,7 @@ async function verifyFunction(fn: AnnotatedFunctionDef, module: AnnotatedModule)
                 body: { type: "block", statements: [] } as any
             };
 
-            const callInfo = printFuncCallSimple(funcDef, model);
+            const callInfo = printFuncCall(funcDef, model);
 
             let errorLocation = "unknown location";
             let errorDetails = "";
