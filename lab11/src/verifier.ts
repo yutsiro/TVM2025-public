@@ -3,6 +3,8 @@ import { AnnotatedModule, AnnotatedFunctionDef, Predicate, FormulaDef } from "..
 import * as ast from "../../lab08/src/funny";
 import * as arith from "../../lab04/src/ast";
 
+import { printFuncCall, printFuncCallSimple } from "./printFuncCall";
+
 let z3anchor: any = null;
 let z3: Context<"main">;
 
@@ -25,6 +27,7 @@ interface VerificationContext {
     currentFunction: AnnotatedFunctionDef;
     solver: Solver<"main">;
     depth: number;
+    location?: string;
 }
 
 function not(p: Predicate): Predicate {
@@ -545,12 +548,10 @@ async function exprToZ3(e: ast.Expr, ctx: VerificationContext): Promise<Arith<"m
     throw new Error(`Unsupported expression type`);
 }
 
-async function addInductionAxiomsForFactorial(
+async function addInductionAxiomsForRecursive(
     fn: AnnotatedFunctionDef,
     ctx: VerificationContext
 ): Promise<void> {
-    if (fn.name !== "factorial") return;
-
     const param = fn.parameters[0];
     const ret = fn.returns[0];
 
@@ -597,8 +598,9 @@ async function verifyFunction(fn: AnnotatedFunctionDef, module: AnnotatedModule)
             depth: 0
         };
 
-        if (fn.name === "factorial") {
-            await addInductionAxiomsForFactorial(fn, ctx);
+        if (checkIfRecursive(fn, module)) {
+
+            await addInductionAxiomsForRecursive(fn, ctx);
         }
 
         if (fn.requires) {
@@ -613,8 +615,47 @@ async function verifyFunction(fn: AnnotatedFunctionDef, module: AnnotatedModule)
         const res = await solver.check();
         if (res === "sat") {
             const model = await solver.model();
-            console.log("Counterexample model:", model.toString());
-            throw new Error(`Verification failed for function "${fn.name}". Possible issue with inductive reasoning.`);
+
+            const funcDef: ast.FunctionDef = {
+                type: "fun" as const,
+                name: fn.name,
+                parameters: fn.parameters.map(p => ({...p, paramType: p.paramType})),
+                returns: fn.returns.map(r => ({...r, paramType: r.paramType})),
+                locals: fn.locals.map(l => ({...l, paramType: l.paramType})),
+                body: { type: "block", statements: [] } as any
+            };
+
+            const callInfo = printFuncCallSimple(funcDef, model);
+
+            let errorLocation = "unknown location";
+            let errorDetails = "";
+
+            if (fn.requires) {
+                const preCtx = { ...ctx, solver: new z3.Solver() };
+                const preZ3 = await predicateToZ3(fn.requires, preCtx);
+                preCtx.solver.add(preZ3);
+                const preCheck = await preCtx.solver.check();
+                if (preCheck === "unsat") {
+                    errorLocation = "precondition is unsatisfiable with current model";
+                }
+            }
+
+            if (fn.ensures) {
+                const postCtx = { ...ctx, solver: new z3.Solver() };
+                const postZ3 = await predicateToZ3(fn.ensures, postCtx);
+                postCtx.solver.add(z3.Not(postZ3));
+                const postCheck = await postCtx.solver.check();
+                if (postCheck === "sat") {
+                    errorLocation = "postcondition does not hold";
+                }
+            }
+
+            throw new Error(
+                `Verification failed for function "${fn.name}"\n` +
+                `Error location: ${errorLocation}\n` +
+                (errorDetails ? `Details: ${errorDetails}\n` : '') +
+                `Counterexample:\n${callInfo}`
+            );
         }
         if (res === "unknown") {
             console.warn(`Z3 returned unknown for "${fn.name}"`);
@@ -622,3 +663,8 @@ async function verifyFunction(fn: AnnotatedFunctionDef, module: AnnotatedModule)
         }
     }
 }
+// [Error: Verification failed for function "factorial"
+//     Error location: postcondition does not hold
+//     Counterexample:
+//     factorial(n=0) => [f=0]
+//       i=0]
